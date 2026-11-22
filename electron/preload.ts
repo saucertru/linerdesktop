@@ -8,6 +8,8 @@ import type { TvSession as YoutubeTvSession } from "./youtube/tv-session";
 import type { SolveResult as YoutubeSolveResult } from "./youtube/n-solver";
 import type { MainNetResult } from "./netdiag";
 import type { NetProbeResult } from "./netprobe/types";
+import type { PlaylistCoverPickResult } from "./playlist-covers/ipc";
+import type { PlaylistCoverVersions } from "./playlist-covers/store";
 import type {
   LocalImportResult,
   LocalLibraryUsage,
@@ -233,6 +235,9 @@ export interface LinerElectronApi {
     state: SavedLyricsState,
     lyrics?: unknown,
   ) => Promise<boolean>;
+  playlistCoversList: () => Promise<PlaylistCoverVersions>;
+  playlistCoversPick: (playlistId: string) => Promise<PlaylistCoverPickResult>;
+  playlistCoversRemove: (playlistId: string) => Promise<boolean>;
   pathForFile: (file: File) => string;
 }
 
@@ -504,6 +509,11 @@ const api: LinerElectronApi = {
   localTracksRemove: (ids) => ipcRenderer.invoke("local-tracks:remove", ids),
   localTracksRemoveAll: () => ipcRenderer.invoke("local-tracks:remove-all"),
   localTracksUsage: () => ipcRenderer.invoke("local-tracks:usage"),
+  playlistCoversList: () => ipcRenderer.invoke("playlist-covers:list"),
+  playlistCoversPick: (playlistId) =>
+    ipcRenderer.invoke("playlist-covers:pick", playlistId),
+  playlistCoversRemove: (playlistId) =>
+    ipcRenderer.invoke("playlist-covers:remove", playlistId),
   savedTracksList: () => ipcRenderer.invoke("saved-tracks:list"),
   savedTracksSave: (input) => ipcRenderer.invoke("saved-tracks:save", input),
   savedTracksRemove: (trackIds) =>

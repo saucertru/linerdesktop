@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   api,
   getAuthSession,
@@ -9,6 +9,10 @@ import {
 } from "@/shared/api";
 import { queryCache } from "@/shared/cache/queryCache";
 import type { Track } from "@/shared/types";
+import {
+  usePlaylistCoverStore,
+  withCustomCover,
+} from "../store/playlistCoverStore";
 
 export interface LibraryPlaylistSummary {
   id: string;
@@ -228,10 +232,23 @@ export function usePlaylistsList() {
     snapshot,
     () => SERVER_SNAPSHOT,
   );
+  const customCovers = usePlaylistCoverStore((s) => s.versions);
   useEffect(() => {
     void load();
+    void usePlaylistCoverStore.getState().load();
   }, []);
-  return state;
+  return useMemo(
+    () => ({
+      ...state,
+      data: {
+        ...state.data,
+        playlists: state.data.playlists.map((playlist) =>
+          withCustomCover(playlist, customCovers),
+        ),
+      },
+    }),
+    [state, customCovers],
+  );
 }
 
 function toDetail(
@@ -360,5 +377,14 @@ export function usePlaylist(id: string | null) {
     };
   }, [id, cacheKey]);
 
-  return { data, error, isLoading };
+  const customCovers = usePlaylistCoverStore((s) => s.versions);
+  useEffect(() => {
+    void usePlaylistCoverStore.getState().load();
+  }, []);
+  const shown = useMemo(
+    () => (data ? withCustomCover(data, customCovers) : data),
+    [data, customCovers],
+  );
+
+  return { data: shown, error, isLoading };
 }

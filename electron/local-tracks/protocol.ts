@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import { protocol } from "electron";
 import type { LocalTrackLibrary } from "./library.js";
 import type { SavedTrackLibrary } from "../saved-tracks/library.js";
+import type { PlaylistCoverStore } from "../playlist-covers/store.js";
 
 export const LOCAL_TRACK_SCHEME = "liner-local";
 
@@ -88,6 +89,7 @@ async function locateFile(
   id: string,
   library: LocalTrackLibrary,
   saved: SavedTrackLibrary,
+  playlistCovers?: PlaylistCoverStore,
 ): Promise<{ path: string; mimeType?: string } | null> {
   if (host === "audio" || host === "cover") {
     const located = await library.locate(host, id);
@@ -99,17 +101,26 @@ async function locateFile(
   }
   if (host === "saved-audio") return saved.locate("audio", id);
   if (host === "saved-cover") return saved.locate("cover", id);
+  if (host === "playlist-cover" && playlistCovers)
+    return playlistCovers.locate(decodeURIComponent(id));
   return null;
 }
 
 export function handleLocalTrackScheme(
   library: LocalTrackLibrary,
   saved: SavedTrackLibrary,
+  playlistCovers?: PlaylistCoverStore,
 ) {
   protocol.handle(LOCAL_TRACK_SCHEME, async (request) => {
     const url = new URL(request.url);
     const id = url.pathname.replace(/^\/+/, "");
-    const located = await locateFile(url.hostname, id, library, saved);
+    const located = await locateFile(
+      url.hostname,
+      id,
+      library,
+      saved,
+      playlistCovers,
+    );
     if (!located) {
       console.warn(
         `[local-tracks] ${url.hostname} ${id} is not in the library`,

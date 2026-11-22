@@ -87,6 +87,7 @@ import { DiscordRpcManager } from "./discord.js";
 import { PoTokenService } from "./youtube/potoken.js";
 import { confineToApp, handleTrusted, onTrusted } from "./ipc-guard.js";
 import { setupLocalTracks } from "./local-tracks/ipc.js";
+import { setupPlaylistCovers } from "./playlist-covers/ipc.js";
 import {
   createSavedTrackLibrary,
   setupSavedTracks,
@@ -593,7 +594,7 @@ if (!gotTheLock) {
       app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME);
     }
     const savedTracks = createSavedTrackLibrary();
-    setupLocalTracks(savedTracks);
+    setupLocalTracks(savedTracks, setupPlaylistCovers());
     setupSavedTracks(savedTracks);
     installNetSimulation(session.defaultSession);
     setupNetProbe();

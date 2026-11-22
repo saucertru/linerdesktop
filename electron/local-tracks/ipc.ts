@@ -4,6 +4,7 @@ import { handleTrusted } from "../ipc-guard.js";
 import { LocalTrackLibrary } from "./library.js";
 import { handleLocalTrackScheme } from "./protocol.js";
 import type { SavedTrackLibrary } from "../saved-tracks/library.js";
+import type { PlaylistCoverStore } from "../playlist-covers/store.js";
 import { LOCAL_AUDIO_EXTENSIONS } from "./types.js";
 
 const stringList = (value: unknown): string[] =>
@@ -13,11 +14,14 @@ const stringList = (value: unknown): string[] =>
       )
     : [];
 
-export function setupLocalTracks(saved: SavedTrackLibrary) {
+export function setupLocalTracks(
+  saved: SavedTrackLibrary,
+  playlistCovers?: PlaylistCoverStore,
+) {
   const library = new LocalTrackLibrary(
     path.join(app.getPath("userData"), "local-tracks"),
   );
-  handleLocalTrackScheme(library, saved);
+  handleLocalTrackScheme(library, saved, playlistCovers);
 
   handleTrusted("local-tracks:list", () => library.list());
 

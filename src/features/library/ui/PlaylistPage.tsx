@@ -40,13 +40,22 @@ import {
   ShareForwardLine,
 } from "@mingcute/react";
 import { AnimatePresence, motion } from "framer-motion";
-import { LuPencil, LuTrash2, LuText, LuShuffle } from "react-icons/lu";
+import {
+  LuPencil,
+  LuTrash2,
+  LuText,
+  LuShuffle,
+  LuImage,
+  LuImageOff,
+} from "react-icons/lu";
 import { buildShareUrl } from "@/shared/utils/share";
 import Button from "@/shared/ui/Button";
 import DropdownMenu from "@/shared/ui/DropdownMenu";
 import SongCardWithMenu from "@/features/player/ui/SongCardWithMenu";
 import CoverImage from "@/features/covers/ui/CoverImage";
 import { useModalStore } from "../store/modalStore";
+import { usePlaylistCoverStore } from "../store/playlistCoverStore";
+import { showToast } from "@/shared/ui/Toast";
 import {
   usePlaylist,
   usePlaylistsList,
@@ -201,6 +210,20 @@ function LibraryPlaylistContent() {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const reorderTracks = useReorderPlaylistTracks();
+  const hasCustomCover = usePlaylistCoverStore(
+    (state) => decodedId !== null && state.versions[decodedId] !== undefined,
+  );
+  const canPickCover = Boolean(window.linerElectron?.playlistCoversPick);
+  const handleChangeCover = useCallback(async () => {
+    if (!decodedId) return;
+    const result = await usePlaylistCoverStore
+      .getState()
+      .pick(decodedId)
+      .catch(() => "unreadable" as const);
+    if (result === "unreadable") {
+      showToast(t("playlist.cover_unreadable"), "error");
+    }
+  }, [decodedId, t]);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
 
@@ -849,6 +872,29 @@ function LibraryPlaylistContent() {
                               label: t("common.edit_description"),
                               onClick: () => setIsEditingDescription(true),
                             },
+                            ...(canPickCover
+                              ? [
+                                  {
+                                    id: "change-cover",
+                                    icon: <LuImage size={15} />,
+                                    label: t("playlist.change_cover"),
+                                    onClick: () => void handleChangeCover(),
+                                  },
+                                ]
+                              : []),
+                            ...(hasCustomCover && decodedId
+                              ? [
+                                  {
+                                    id: "remove-cover",
+                                    icon: <LuImageOff size={15} />,
+                                    label: t("playlist.remove_cover"),
+                                    onClick: () =>
+                                      void usePlaylistCoverStore
+                                        .getState()
+                                        .remove(decodedId),
+                                  },
+                                ]
+                              : []),
                             {
                               id: "share",
                               icon: <ShareForwardLine size={15} />,

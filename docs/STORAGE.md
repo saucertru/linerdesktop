@@ -36,10 +36,13 @@ played tracks are evicted (`src/shared/storage/audioCache.ts`).
 | `local-tracks/library.json`        | Index of imported audio files                  | `electron/local-tracks/library.ts` |
 | `local-tracks/audio/<hash>.<ext>`  | Copies of imported audio files                 | same                               |
 | `local-tracks/covers/<hash>.<ext>` | Artwork taken from their tags                  | same                               |
+| `playlist-covers/<playlistId>.jpg` | Custom playlist covers picked on this device   | `electron/playlist-covers/`        |
 
 Imported files are copies, so the originals can be moved or deleted. They are served to
 the renderer through the `liner-local://audio/<hash>` and `liner-local://cover/<hash>`
-protocol (`electron/local-tracks/protocol.ts`), never through IndexedDB.
+protocol (`electron/local-tracks/protocol.ts`), never through IndexedDB. Custom playlist
+covers are center-cropped to a 600px square JPEG when picked, stay on the device, and are
+served as `liner-local://playlist-cover/<playlistId>`.
 
 ## localStorage
 

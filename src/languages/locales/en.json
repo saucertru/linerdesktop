@@ -561,7 +561,10 @@
     "likes_empty": "No liked songs yet",
     "likes_load_failed": "Couldn't load your liked songs",
     "load_failed": "Couldn't load this playlist",
-    "load_failed_desc": "Check your connection and try again."
+    "load_failed_desc": "Check your connection and try again.",
+    "change_cover": "Change cover",
+    "remove_cover": "Remove custom cover",
+    "cover_unreadable": "Couldn't read that image"
   },
   "search": {
     "placeholder": "Search tracks, artists, albums...",
