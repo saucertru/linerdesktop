@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { api } from "@/shared/api";
 import { notifyLibraryChanged, evictPlaylistFromCache } from "./usePlaylists";
 import { setTrackLiked, toggleTrackLike } from "./useLikedTracks";
+import { useMixStore } from "@/features/player/store/mixStore";
 
 type Options = {
   onSuccess?: (...args: any[]) => void;
@@ -117,6 +118,7 @@ export function useRemoveExternalItem() {
         }
         try {
           const res = await api.deletePlaylist(id);
+          useMixStore.getState().removeMix(id);
           // purge any saved collection reference in case it was both created and saved
           await api.removeCollection("playlists", id).catch(() => {});
           return res;

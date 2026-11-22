@@ -7,6 +7,7 @@ import {
 } from "../store/playerStore";
 import { playerRuntime } from "./playerRuntime";
 import { isRadioContext, shouldRefillRadio } from "./radioMode";
+import { autoNextIndex } from "./transitionPlanner";
 import {
   LazyShuffle,
   SHUFFLE_REFILL_AT,
@@ -890,6 +891,10 @@ class PlayerEngine {
     usePlayerStore.getState().setKeepSpeedAcrossTracks(keep);
   }
 
+  public setTransitionSeconds(seconds: number): void {
+    usePlayerStore.getState().setTransitionSeconds(seconds);
+  }
+
   public setIsReverbEnabled(enabled: boolean): void {
     pitchShifter.resumeContext();
     usePlayerStore.getState().setIsReverbEnabled(enabled);
@@ -1363,16 +1368,7 @@ class PlayerEngine {
   }
 
   private computeNextIndex(isAutoEnd: boolean = false): number | null {
-    const store = usePlayerStore.getState();
-    const queueSize = store.queue.length;
-    if (queueSize === 0 || store.currentIndex < 0) return null;
-    if (isAutoEnd && store.repeat === "one") return store.currentIndex;
-
-    if (store.currentIndex + 1 < queueSize) return store.currentIndex + 1;
-    // radio never wraps to its first track; skipNext refills it instead
-    if (isRadioContext(store.playbackContext)) return null;
-    if (store.repeat === "all" || store.repeat === "one") return 0;
-    return null;
+    return autoNextIndex(usePlayerStore.getState(), isAutoEnd);
   }
 
   /** queue refill trigger: radio refills early (one track left), autoplay-similar on the last track */

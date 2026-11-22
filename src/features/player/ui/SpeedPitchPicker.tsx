@@ -8,6 +8,7 @@ import { playerEngine } from "../engine/playerEngine";
 import { RulerControl } from "./speed/RulerControl";
 import { OptionToggle } from "./speed/OptionToggle";
 import { SpeedPresets } from "./speed/SpeedPresets";
+import { MAX_TRANSITION_SECONDS } from "../engine/transitions";
 
 export interface SpeedPitchPickerProps {
   className?: string;
@@ -33,6 +34,11 @@ export const SpeedPitchPicker = memo(function SpeedPitchPicker({
   const keepSpeedAcrossTracks = player.keepSpeedAcrossTracks ?? true;
   const isReverbEnabled = player.isReverbEnabled ?? false;
   const reverbLevel = player.reverbLevel ?? 0.35;
+  const transitionSeconds = player.transitionSeconds ?? 0;
+  const formatTransition = (seconds: number) =>
+    seconds === 0
+      ? t("player.transition_off")
+      : t("player.transition_seconds", { count: seconds });
 
   const toggleReverb = (enabled: boolean) => {
     if (enabled && reverbLevel < MIN_REVERB_ON_ENABLE) {
@@ -72,6 +78,16 @@ export const SpeedPitchPicker = memo(function SpeedPitchPicker({
         neutral={0}
         format={formatPitch}
         onChange={(pitch) => playerEngine.setPitchSemitones(pitch)}
+      />
+      <RulerControl
+        label={t("player.transition")}
+        value={transitionSeconds}
+        min={0}
+        max={MAX_TRANSITION_SECONDS}
+        step={1}
+        neutral={0}
+        format={formatTransition}
+        onChange={(seconds) => playerEngine.setTransitionSeconds(seconds)}
       />
       <div className="flex flex-col gap-[12px] pt-[2px]">
         <OptionToggle

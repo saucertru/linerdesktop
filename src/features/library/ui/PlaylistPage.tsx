@@ -38,6 +38,7 @@ import {
   PlaylistFill,
   CheckLine,
   ShareForwardLine,
+  WaveLine,
 } from "@mingcute/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { LuPencil, LuTrash2, LuText, LuShuffle } from "react-icons/lu";
@@ -47,6 +48,8 @@ import DropdownMenu from "@/shared/ui/DropdownMenu";
 import SongCardWithMenu from "@/features/player/ui/SongCardWithMenu";
 import CoverImage from "@/features/covers/ui/CoverImage";
 import { useModalStore } from "../store/modalStore";
+import MixDialog from "./mix/MixDialog";
+import { useMixStore } from "@/features/player/store/mixStore";
 import {
   usePlaylist,
   usePlaylistsList,
@@ -201,6 +204,10 @@ function LibraryPlaylistContent() {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const reorderTracks = useReorderPlaylistTracks();
+  const [mixOpen, setMixOpen] = useState(false);
+  const mixEnabled = useMixStore((state) =>
+    decodedId ? state.mixes[decodedId]?.enabled === true : false,
+  );
   const titleRef = useRef<HTMLHeadingElement>(null);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
 
@@ -821,6 +828,23 @@ function LibraryPlaylistContent() {
                           {t("common.add_to_queue")}
                         </span>
                       </Button>
+                      {decodedId && (
+                        <Button
+                          variant="secondary"
+                          onClick={() => setMixOpen(true)}
+                          aria-pressed={mixEnabled}
+                          className={`${HERO_BUTTON_CLASS} ${HERO_GLASS_BUTTON_CLASS} px-[14px] text-text-primary`}
+                          title={t("mix.title")}
+                        >
+                          <WaveLine
+                            size={16}
+                            className={
+                              mixEnabled ? "text-accent-primary" : undefined
+                            }
+                          />
+                          <span>{t("mix.button")}</span>
+                        </Button>
+                      )}
                       <TrackSortMenu
                         sort={sort}
                         disabled={currentTracks.length < 2}
@@ -877,6 +901,14 @@ function LibraryPlaylistContent() {
                     </>
                   }
                 />
+                {decodedId && (
+                  <MixDialog
+                    open={mixOpen}
+                    onOpenChange={setMixOpen}
+                    playlistId={decodedId}
+                    tracks={viewData.tracks}
+                  />
+                )}
               </div>
 
               <ListPanel>

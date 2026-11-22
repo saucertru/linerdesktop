@@ -56,6 +56,7 @@ describe("SpeedPitchPicker Component", () => {
       pitchSemitones: 0.0,
       isPitchLinked: true,
       keepSpeedAcrossTracks: true,
+      transitionSeconds: 0,
     });
   });
 
@@ -69,13 +70,13 @@ describe("SpeedPitchPicker Component", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders speed and pitch sliders", () => {
+  it("renders speed, pitch and transition sliders", () => {
     act(() => {
       root?.render(<SpeedPitchPicker />);
     });
 
     const sliders = container?.querySelectorAll('[role="slider"]');
-    expect(sliders?.length).toBe(2);
+    expect(sliders?.length).toBe(3);
     expect(container?.textContent).toContain("x1.00");
     expect(container?.textContent).toContain("0.0 st");
   });
@@ -150,5 +151,37 @@ describe("SpeedPitchPicker Component", () => {
     });
 
     expect(setReverbSpy).toHaveBeenCalledWith(true);
+  });
+
+  it("shows the transition as off at zero and in seconds otherwise", () => {
+    act(() => {
+      root?.render(<SpeedPitchPicker />);
+    });
+    expect(container?.textContent).toContain("Transition");
+    expect(container?.textContent).toContain("Off");
+
+    act(() => {
+      usePlayerStore.setState({ transitionSeconds: 6 });
+    });
+    expect(container?.textContent).toContain("6 sec");
+  });
+
+  it("sets the transition length from the slider", () => {
+    const setTransitionSpy = vi.spyOn(playerEngine, "setTransitionSeconds");
+    usePlayerStore.setState({ transitionSeconds: 4 });
+
+    act(() => {
+      root?.render(<SpeedPitchPicker />);
+    });
+
+    const value = Array.from(container?.querySelectorAll("button") || []).find(
+      (b) => b.textContent === "4 sec",
+    );
+    const increase = value?.nextElementSibling as HTMLButtonElement | undefined;
+    expect(increase).toBeDefined();
+    act(() => {
+      increase?.click();
+    });
+    expect(setTransitionSpy).toHaveBeenCalledWith(5);
   });
 });

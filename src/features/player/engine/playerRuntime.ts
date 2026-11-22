@@ -12,6 +12,18 @@ import { pitchShifter } from "./pitchShifter";
 import { FLAT_EQ, isEqActive } from "./equalizer";
 import { resolvePlaybackStream, type PlaybackStream } from "./streamResolver";
 import { logNowPlaying } from "./nowPlayingLog";
+import { deckMixer } from "./deckMixer";
+import {
+  planNeedsFilters,
+  transitionFrame,
+  type TransitionPlan,
+} from "./transitions";
+import {
+  audibleEndMs,
+  audibleStartMs,
+  planUpcoming,
+} from "./transitionPlanner";
+import { analyzeTrack } from "./trackAnalyzer";
 import {
   downloadAudioBytes,
   isBotCheckError,
@@ -24,6 +36,30 @@ import {
 // error recovery tuning (see the audio "error" handler)
 const RECOVERY_HOLD_MS = 3000;
 const WAITING_GRACE_MS = 300; // a buffering hiccup shorter than this never shows // must play this far past a recovery before it may retry again
+// transitions: closer to the end than this and the track just ends as before
+const MIN_TRANSITION_MS = 400;
+// a mixed playlist measures its tracks this long before a transition is due
+const MIX_ANALYSIS_LEAD_MS = 45_000;
+const ACTIVE_AUDIO_ID = "liner-audio";
+const SPARE_AUDIO_ID = "liner-audio-spare";
+
+interface PendingHandoff {
+  toTrackId: string;
+  plan: TransitionPlan;
+  mixed: boolean;
+}
+
+// the deck still playing the previous track while the next one fades in
+interface OutgoingDeck {
+  audio: HTMLAudioElement;
+  plan: TransitionPlan;
+  blobUrl: string | null;
+  release: (() => void) | null;
+  startedAt: number | null;
+  onEnded: () => void;
+}
+
+const clampVolume = (value: number) => Math.max(0, Math.min(1, value));
 
 export class PlayerRuntime {
   private audio: HTMLAudioElement;
@@ -58,6 +94,14 @@ export class PlayerRuntime {
   // loaded / cached track fires waiting -> playing within milliseconds, and flipping
   // the status for that re-animated the play / pause button on every seek
   private waitingTimer: ReturnType<typeof setTimeout> | null = null;
+  // transitions: the second audio element, the track handing over, and the
+  // track we already started a transition from (so it fires once)
+  private decks: HTMLAudioElement[] = [];
+  private outgoing: OutgoingDeck | null = null;
+  private pendingHandoff: PendingHandoff | null = null;
+  private transitionTimer: ReturnType<typeof setTimeout> | null = null;
+  private transitionFiredFor: string | null = null;
+  private analysisAsked = new Set<string>();
   public onEnded?: () => void;
   public onError?: (info: { trackId: string; message: string }) => void;
 
@@ -79,6 +123,8 @@ export class PlayerRuntime {
       win.__liner_audio = audio;
     }
     this.audio = audio;
+    this.decks = [audio];
+    deckMixer.register(audio);
     this.setupAudioListeners(this.audio);
 
     const initialVolume = usePlayerStore.getState().volume;
@@ -92,8 +138,12 @@ export class PlayerRuntime {
       }
       if (state.volume !== prevState.volume) {
         this.cancelFade();
-        if (!this.audio.paused) {
+        // mid-transition the next frame applies the new volume to both decks
+        if (this.outgoing?.startedAt == null && !this.audio.paused) {
           this.audio.volume = state.volume;
+        }
+        if (this.outgoing && this.outgoing.startedAt === null) {
+          this.outgoing.audio.volume = state.volume;
         }
       }
       if (
@@ -275,6 +325,7 @@ export class PlayerRuntime {
         this.recoveryHoldUntilMs = null;
         this.recoveryAttempts = 0;
       }
+      this.maybeStartTransition(audioEl);
     });
 
     audioEl.addEventListener("durationchange", () => {
@@ -331,6 +382,8 @@ export class PlayerRuntime {
       if (this.isResetting || audioEl !== this.audio) return;
       if (!this.currentTrackId) return;
       if (this.attachedTrackId !== this.currentTrackId) return;
+      // a transition already asked for the next track
+      if (this.pendingHandoff) return;
 
       // Ensure the track truly finished playing (not an empty media load or teardown artefact)
       const duration = audioEl.duration;
@@ -523,6 +576,230 @@ export class PlayerRuntime {
     }
   }
 
+  // ---- transitions -------------------------------------------------------
+  // Near the end of a track the next one starts on a second audio element and the
+  // two are blended. The old element becomes the "outgoing" deck and is emptied
+  // once it is silent; the new one becomes `this.audio`, so the rest of the
+  // runtime never needs to know a transition happened.
+
+  private spareDeck(): HTMLAudioElement {
+    const existing = this.decks.find((deck) => deck !== this.audio);
+    if (existing) return existing;
+    const win = window as any;
+    const known = (win.__liner_audio_decks ?? []) as HTMLAudioElement[];
+    let spare = known.find((deck) => deck !== this.audio && deck.isConnected);
+    if (!spare) {
+      spare = new Audio();
+      spare.crossOrigin = "anonymous";
+      spare.preload = "auto";
+      document.body.appendChild(spare);
+    }
+    spare.id = SPARE_AUDIO_ID;
+    spare.volume = 0;
+    win.__liner_audio_decks = [this.audio, spare];
+    this.decks.push(spare);
+    deckMixer.register(spare);
+    this.setupAudioListeners(spare);
+    // once one deck goes through Web Audio, both must, or effects would drop out
+    if (deckMixer.isConnected(this.audio) || pitchShifter.isAttached()) {
+      deckMixer.connect(spare);
+    }
+    return spare;
+  }
+
+  private promote(deck: HTMLAudioElement) {
+    const previous = this.audio;
+    previous.id = SPARE_AUDIO_ID;
+    deck.id = ACTIVE_AUDIO_ID;
+    this.audio = deck;
+    if (typeof window !== "undefined") (window as any).__liner_audio = deck;
+  }
+
+  private requestMixAnalysis(tracks: (Track | null | undefined)[]) {
+    for (const track of tracks) {
+      if (!track || this.analysisAsked.has(track.id)) continue;
+      this.analysisAsked.add(track.id);
+      void analyzeTrack(track).then((result) => {
+        // not on this device yet: ask again once it may have been cached
+        if (!result) this.analysisAsked.delete(track.id);
+      });
+    }
+  }
+
+  private maybeStartTransition(audioEl: HTMLAudioElement) {
+    if (this.outgoing || this.pendingHandoff) return;
+    const trackId = this.currentTrackId;
+    if (!trackId || this.attachedTrackId !== trackId) return;
+    if (this.transitionFiredFor === trackId) return;
+    if (audioEl.paused || audioEl.seeking) return;
+    const state = usePlayerStore.getState();
+    if (state.status !== "playing" || state.currentTrack?.id !== trackId)
+      return;
+    const durationMs = audioEl.duration * 1000;
+    if (!Number.isFinite(durationMs) || durationMs <= 0) return;
+
+    const upcoming = planUpcoming(state);
+    if (!upcoming) return;
+    const rate = audioEl.playbackRate > 0 ? audioEl.playbackRate : 1;
+    const positionMs = audioEl.currentTime * 1000;
+    const endMs = upcoming.mixed
+      ? audibleEndMs(trackId, durationMs)
+      : durationMs;
+    const remainingMs = (endMs - positionMs) / rate;
+    if (upcoming.mixed && remainingMs <= MIX_ANALYSIS_LEAD_MS) {
+      this.requestMixAnalysis([state.currentTrack, upcoming.next]);
+    }
+    // never blend away more than half of a short track
+    const planMs = Math.min(upcoming.plan.durationMs, durationMs / rate / 2);
+    if (remainingMs > planMs || remainingMs < MIN_TRANSITION_MS) return;
+
+    const plan = { ...upcoming.plan, durationMs: Math.round(remainingMs) };
+    if (planNeedsFilters(plan)) {
+      deckMixer.connect(audioEl);
+      deckMixer.connect(this.spareDeck());
+    }
+    this.transitionFiredFor = trackId;
+    this.pendingHandoff = {
+      toTrackId: upcoming.next.id,
+      plan,
+      mixed: upcoming.mixed,
+    };
+    log(
+      "cyan",
+      "transition",
+      `${plan.volume}${plan.eq !== "none" ? ` + ${plan.eq}` : ""}${plan.effect !== "none" ? ` + ${plan.effect}` : ""} over ${(plan.durationMs / 1000).toFixed(1)}s into "${upcoming.next.title}"`,
+    );
+    state.dispatch({ type: "SKIP_NEXT", isAutoEnd: true });
+  }
+
+  /**
+   * The handoff waiting for `trackId`, if the old track is still playing. It stays
+   * pending until taken, so the old track's "ended" can't skip a second time while
+   * the new one is still being fetched.
+   */
+  private takeHandoff(
+    trackId: string,
+    expected: PendingHandoff | null,
+  ): PendingHandoff | null {
+    const handoff = this.pendingHandoff;
+    this.pendingHandoff = null;
+    if (!handoff || handoff !== expected || handoff.toTrackId !== trackId)
+      return null;
+    if (!this.attachedTrackId || this.audio.paused) return null;
+    return handoff;
+  }
+
+  private beginHandoff(handoff: PendingHandoff) {
+    const from = this.audio;
+    const spare = this.spareDeck();
+    this.endOutgoing();
+    try {
+      spare.pause();
+    } catch {}
+    const onEnded = () => {
+      if (this.outgoing?.audio === from) this.endOutgoing();
+    };
+    from.addEventListener("ended", onEnded, { once: true });
+    this.outgoing = {
+      audio: from,
+      plan: handoff.plan,
+      blobUrl: this.activeBlobUrl,
+      release: this.releaseActiveStream,
+      startedAt: null,
+      onEnded,
+    };
+    this.activeBlobUrl = null;
+    this.releaseActiveStream = null;
+    this.attachedTrackId = null;
+    this.attachedFromLiner = false;
+    this.currentSessionExpiresAt = null;
+    this.promote(spare);
+    spare.volume = 0;
+    if (handoff.mixed) {
+      const skip = audibleStartMs(handoff.toTrackId);
+      if (skip > 0 && this.pendingStartPositionMs <= 0) {
+        this.pendingStartPositionMs = skip;
+      }
+    }
+  }
+
+  /** Called once the incoming track is playing: blend, or fade in as usual. */
+  private fadeInAfterLoad() {
+    const out = this.outgoing;
+    const volume = usePlayerStore.getState().volume;
+    if (!out || out.startedAt !== null) {
+      this.fadeVolume(volume, 180);
+      return;
+    }
+    const rate = out.audio.playbackRate > 0 ? out.audio.playbackRate : 1;
+    const leftMs = Number.isFinite(out.audio.duration)
+      ? ((out.audio.duration - out.audio.currentTime) * 1000) / rate
+      : out.plan.durationMs;
+    const durationMs = Math.min(out.plan.durationMs, leftMs);
+    // the old track ran out while the new one was loading
+    if (durationMs < 250 || out.audio.paused) {
+      this.endOutgoing();
+      this.fadeVolume(volume, 180);
+      return;
+    }
+    this.cancelFade();
+    const startedAt = performance.now();
+    out.startedAt = startedAt;
+    const tick = () => {
+      this.transitionTimer = null;
+      if (this.outgoing !== out) return;
+      const progress = (performance.now() - startedAt) / durationMs;
+      const frame = transitionFrame(out.plan, progress);
+      const level = usePlayerStore.getState().volume;
+      out.audio.volume = clampVolume(level * frame.outgoing.gain);
+      this.audio.volume = clampVolume(level * frame.incoming.gain);
+      deckMixer.setFrame(out.audio, frame.outgoing);
+      deckMixer.setFrame(this.audio, frame.incoming);
+      if (progress >= 1) {
+        this.endOutgoing();
+        this.audio.volume = clampVolume(level);
+        return;
+      }
+      this.transitionTimer = setTimeout(tick, 16);
+    };
+    tick();
+  }
+
+  /** Stops and empties the outgoing deck. Safe to call any time. */
+  private endOutgoing() {
+    if (this.transitionTimer !== null) {
+      clearTimeout(this.transitionTimer);
+      this.transitionTimer = null;
+    }
+    const out = this.outgoing;
+    if (!out) return;
+    this.outgoing = null;
+    const audio = out.audio;
+    audio.removeEventListener("ended", out.onEnded);
+    try {
+      audio.pause();
+    } catch {}
+    deckMixer.setFrame(audio, null);
+    deckMixer.setFrame(this.audio, null);
+    out.release?.();
+    try {
+      audio.removeAttribute("src");
+      audio.load();
+    } catch {}
+    if (out.blobUrl) URL.revokeObjectURL(out.blobUrl);
+    audio.volume = 0;
+  }
+
+  /** Drops any transition, cutting the old track; keeps the current one audible. */
+  private abortTransition() {
+    const wasBlending = this.outgoing?.startedAt != null;
+    this.pendingHandoff = null;
+    this.endOutgoing();
+    if (wasBlending && !this.audio.paused) {
+      this.audio.volume = clampVolume(usePlayerStore.getState().volume);
+    }
+  }
+
   private cancelFade(): void {
     if (this.fadeTimer !== null) {
       clearTimeout(this.fadeTimer);
@@ -611,6 +888,8 @@ export class PlayerRuntime {
   }
 
   private safeResetAudioElement() {
+    this.pendingHandoff = null;
+    this.endOutgoing();
     this.isResetting = true;
     this.currentSessionExpiresAt = null;
     try {
@@ -761,6 +1040,9 @@ export class PlayerRuntime {
     this.cancelFade();
     this.pendingStartPositionMs = startPositionMs;
     const epoch = ++this.loadEpoch;
+    const expectedHandoff =
+      this.pendingHandoff?.toTrackId === track.id ? this.pendingHandoff : null;
+    if (!expectedHandoff) this.pendingHandoff = null;
 
     if (this.currentTrackId !== track.id) {
       this.recoveryAttempts = 0;
@@ -795,7 +1077,17 @@ export class PlayerRuntime {
     store.setStatus("loading", null);
     store.setPosition(startPositionMs > 0 ? startPositionMs : 0);
 
-    this.pauseForTransition();
+    const handoff =
+      epoch === this.loadEpoch
+        ? this.takeHandoff(track.id, expectedHandoff)
+        : null;
+    if (handoff) {
+      this.beginHandoff(handoff);
+    } else {
+      this.endOutgoing();
+      this.pauseForTransition();
+    }
+    this.transitionFiredFor = null;
 
     try {
       const cachedAudio =
@@ -863,7 +1155,7 @@ export class PlayerRuntime {
 
         if (epoch === this.loadEpoch) {
           usePlayerStore.getState().setStatus("playing");
-          this.fadeVolume(usePlayerStore.getState().volume, 180);
+          this.fadeInAfterLoad();
         }
         logNowPlaying(track, true, audioStartLatencyMs);
         return;
@@ -935,7 +1227,7 @@ export class PlayerRuntime {
 
       if (epoch === this.loadEpoch) {
         usePlayerStore.getState().setStatus("playing");
-        this.fadeVolume(usePlayerStore.getState().volume, 180);
+        this.fadeInAfterLoad();
         this.cacheAudioInBackground(track, stream, bgCacheController.signal);
       }
       logNowPlaying(track, false, audioStartLatencyMs);
@@ -1022,6 +1314,7 @@ export class PlayerRuntime {
   }
 
   public pause() {
+    this.abortTransition();
     const epoch = ++this.loadEpoch;
     this.loadAbortController?.abort();
     this.loadAbortController = null;
@@ -1103,6 +1396,9 @@ export class PlayerRuntime {
   }
 
   public seek(positionMs: number) {
+    this.abortTransition();
+    // seeking back may bring the end of the track round again
+    this.transitionFiredFor = null;
     if (!this.audio.src || this.audio.src === window.location.href) return;
     try {
       if (this.audio.readyState >= 1) {

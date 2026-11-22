@@ -11,6 +11,7 @@ import {
   normalizeEqGains,
   type EqCustomPreset,
 } from "../engine/equalizer";
+import { MAX_TRANSITION_SECONDS } from "../engine/transitions";
 
 export { debouncedStorage };
 
@@ -75,6 +76,8 @@ export interface SessionState {
   isEqEnabled: boolean;
   eqGains: number[];
   eqCustomPresets: EqCustomPreset[];
+  /** seconds songs overlap and fade into each other; 0 = off */
+  transitionSeconds: number;
 }
 
 export type PlayerState = TransportState &
@@ -132,12 +135,18 @@ export interface PlayerStore extends PlayerState {
   setIsEqEnabled: (enabled: boolean) => void;
   setEqGains: (gains: number[]) => void;
   setEqCustomPresets: (presets: EqCustomPreset[]) => void;
+  setTransitionSeconds: (seconds: number) => void;
   resetSpeedAndPitch: () => void;
   clearQueue: () => void;
   resetPlayback: () => void;
 }
 
 const PLAYER_SESSION_STORAGE_KEY = "liner_player_session_v2";
+
+export function normalizeTransitionSeconds(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.round(Math.min(MAX_TRANSITION_SECONDS, Math.max(0, value)));
+}
 const PLAYER_RESUME_STORAGE_KEY = "liner_player_resume_v1";
 const RESUME_SAVE_INTERVAL_MS = 10_000;
 
@@ -204,6 +213,7 @@ export const usePlayerStore = create<PlayerStore>()(
       isEqEnabled: false,
       eqGains: FLAT_EQ,
       eqCustomPresets: [],
+      transitionSeconds: 0,
 
       dispatch: () => {
         // Implementation injected by PlayerEngine
@@ -262,6 +272,10 @@ export const usePlayerStore = create<PlayerStore>()(
         set({ eqGains: normalizeEqGains(eqGains) }),
       setEqCustomPresets: (eqCustomPresets: EqCustomPreset[]) =>
         set({ eqCustomPresets: normalizeEqCustomPresets(eqCustomPresets) }),
+      setTransitionSeconds: (transitionSeconds: number) =>
+        set({
+          transitionSeconds: normalizeTransitionSeconds(transitionSeconds),
+        }),
       resetSpeedAndPitch: () => set({ playbackRate: 1, pitchSemitones: 0 }),
       resetPlayback: () =>
         set({
@@ -372,6 +386,9 @@ export const usePlayerStore = create<PlayerStore>()(
           state.eqCustomPresets = normalizeEqCustomPresets(
             state.eqCustomPresets,
           );
+          state.transitionSeconds = normalizeTransitionSeconds(
+            state.transitionSeconds,
+          );
         }
       },
       partialize: (state) => ({
@@ -405,6 +422,7 @@ export const usePlayerStore = create<PlayerStore>()(
         isEqEnabled: state.isEqEnabled,
         eqGains: state.eqGains,
         eqCustomPresets: state.eqCustomPresets,
+        transitionSeconds: state.transitionSeconds,
       }),
     },
   ),

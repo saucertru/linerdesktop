@@ -57,6 +57,8 @@ Settings and small state, as zustand `persist` stores or plain keys.
 | `liner_youtube_page_id`                                               | The brand channel picked for the YouTube account                                                         |
 | `liner_search_history`                                                | Recent searches                                                                                          |
 | `liner_library_view_mode`                                             | Grid or list in the library                                                                              |
+| `liner_playlist_mixes_v1`                                             | Playlist mixes: on or off, and the transition between each pair of songs                                 |
+| `liner_track_analysis_v1`                                             | Tempo and where sound starts and ends, per track, for mixes (up to 600 tracks)                           |
 | `liner_locale`, `theme`                                               | Language and theme                                                                                       |
 | `liner_lyrics_*`, `liner:artist:*`, `liner:search:*`, `liner:query:*` | Small caches                                                                                             |
 

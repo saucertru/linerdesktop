@@ -1,3 +1,4 @@
+import { deckMixer } from "./deckMixer";
 import {
   EQ_BANDS,
   EQ_BAND_Q,
@@ -8,7 +9,7 @@ import {
 
 const GRAIN_PERIOD = 0.038;
 const NUM_TAPS = 4;
-const GRAPH_VERSION = 2;
+const GRAPH_VERSION = 3;
 const BRANCH_TEARDOWN_MS = 200;
 const IDLE_SUSPEND_MS = 400;
 const REVERB_TAIL_SUSPEND_MS = 3000;
@@ -215,7 +216,8 @@ type BranchName = "pitch" | "reverb" | "eq";
 interface AudioEffectsGraph {
   version: number;
   ctx: AudioContext;
-  sourceNode: MediaElementAudioSourceNode;
+  /** the deck bus (a gain node fed by every audio element) */
+  sourceNode: AudioNode;
   pitchDryGain: GainNode;
   pitchWetGain: GainNode;
   pitchStageOutput: GainNode;
@@ -397,7 +399,7 @@ function disposeStaleGraph(graph: any): void {
 
 function buildGraph(
   ctx: AudioContext,
-  sourceNode: MediaElementAudioSourceNode,
+  sourceNode: AudioNode,
 ): AudioEffectsGraph {
   const pitchDryGain = ctx.createGain();
   const pitchWetGain = ctx.createGain();
@@ -489,7 +491,7 @@ function buildGraph(
 
 export class PitchShifterController {
   private context: AudioContext | null = null;
-  private sourceNode: MediaElementAudioSourceNode | null = null;
+  private sourceNode: AudioNode | null = null;
   private graph: AudioEffectsGraph | null = null;
   private audio: HTMLAudioElement | null = null;
   private isConnected = false;
@@ -512,31 +514,11 @@ export class PitchShifterController {
       this.context = ctx;
 
       const audioObj = audio as any;
-      let sourceNode = audioObj.__liner_source_node as
-        MediaElementAudioSourceNode | undefined;
-
-      if (!sourceNode) {
-        if (
-          win.__liner_media_source_node &&
-          win.__liner_media_source_node.mediaElement === audio
-        ) {
-          sourceNode = win.__liner_media_source_node;
-          audioObj.__liner_source_node = sourceNode;
-        } else {
-          try {
-            sourceNode = ctx.createMediaElementSource(audio);
-            audioObj.__liner_source_node = sourceNode;
-            win.__liner_media_source_node = sourceNode;
-          } catch (sourceErr: any) {
-            if (win.__liner_media_source_node) {
-              sourceNode = win.__liner_media_source_node;
-              audioObj.__liner_source_node = sourceNode;
-            } else {
-              throw sourceErr;
-            }
-          }
-        }
-      }
+      // every deck feeds one bus; the graph hangs off that bus, so a transition's
+      // second deck goes through the same effects as the first
+      deckMixer.connect(audio);
+      deckMixer.connectAll();
+      const sourceNode = deckMixer.claimBus();
 
       if (!sourceNode) {
         return;
@@ -646,12 +628,18 @@ export class PitchShifterController {
     const audio = this.audio;
     const ctx = this.context;
     if (!audio || !ctx || !audio.paused) return;
+    // the other deck may still be playing out a transition through this context
+    if (deckMixer.isAnyDeckPlaying()) return;
     const delay = this.graph?.reverbConnected
       ? REVERB_TAIL_SUSPEND_MS
       : IDLE_SUSPEND_MS;
     this.suspendTimer = setTimeout(() => {
       this.suspendTimer = null;
-      if (audio.paused && ctx.state === "running") {
+      if (
+        audio.paused &&
+        !deckMixer.isAnyDeckPlaying() &&
+        ctx.state === "running"
+      ) {
         void ctx.suspend().catch(() => {});
       }
     }, delay);

@@ -33,6 +33,7 @@ const EMPTY_STATE: PlayerState = {
   isEqEnabled: false,
   eqGains: FLAT_EQ,
   eqCustomPresets: [],
+  transitionSeconds: 0,
 };
 
 export function usePlayerState(): PlayerState {
